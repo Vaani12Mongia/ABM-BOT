@@ -1,1 +1,14 @@
+# Runtime state
+sent.json
+pending/
+
+# Secrets
 .env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# VS Code
+.vscode/

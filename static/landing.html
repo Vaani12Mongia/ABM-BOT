@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AIONOS Account News Bot</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Nav ── */
+    nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 48px;
+      border-bottom: 1px solid rgba(255,255,255,.06);
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 16px;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: .2px;
+    }
+    .logo-dot {
+      width: 9px; height: 9px;
+      background: #22c55e;
+      border-radius: 50%;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+    .nav-login {
+      font-size: 14px;
+      font-weight: 500;
+      color: #94a3b8;
+      text-decoration: none;
+      padding: 8px 18px;
+      border: 1px solid #334155;
+      border-radius: 7px;
+      transition: color .15s, border-color .15s;
+    }
+    .nav-login:hover { color: #e2e8f0; border-color: #64748b; }
+
+    /* ── Hero ── */
+    .hero {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 80px 24px 60px;
+    }
+
+    .badge-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: .5px;
+      text-transform: uppercase;
+      color: #22c55e;
+      background: rgba(34,197,94,.1);
+      border: 1px solid rgba(34,197,94,.2);
+      padding: 5px 14px;
+      border-radius: 20px;
+      margin-bottom: 32px;
+    }
+    .badge-pill-dot {
+      width: 6px; height: 6px;
+      background: #22c55e;
+      border-radius: 50%;
+    }
+
+    h1 {
+      font-size: clamp(32px, 5vw, 54px);
+      font-weight: 800;
+      line-height: 1.15;
+      letter-spacing: -.5px;
+      color: #fff;
+      max-width: 720px;
+      margin-bottom: 20px;
+    }
+    h1 span {
+      background: linear-gradient(135deg, #3b82f6, #818cf8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .tagline {
+      font-size: 18px;
+      color: #94a3b8;
+      max-width: 520px;
+      line-height: 1.6;
+      margin-bottom: 52px;
+    }
+
+    /* ── Features ── */
+    .features {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      max-width: 480px;
+      width: 100%;
+      margin-bottom: 52px;
+      text-align: left;
+    }
+    .feature {
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+      background: rgba(255,255,255,.04);
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 10px;
+      padding: 16px 20px;
+    }
+    .feature-icon {
+      font-size: 20px;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+    .feature-text strong {
+      display: block;
+      font-size: 14px;
+      font-weight: 600;
+      color: #f1f5f9;
+      margin-bottom: 3px;
+    }
+    .feature-text span {
+      font-size: 13px;
+      color: #64748b;
+      line-height: 1.5;
+    }
+
+    /* ── CTA button ── */
+    .cta {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: #2563eb;
+      color: #fff;
+      font-size: 16px;
+      font-weight: 600;
+      padding: 15px 36px;
+      border-radius: 9px;
+      text-decoration: none;
+      transition: background .15s, transform .12s, box-shadow .15s;
+      box-shadow: 0 0 0 0 rgba(37,99,235,0);
+    }
+    .cta:hover {
+      background: #1d4ed8;
+      transform: translateY(-1px);
+      box-shadow: 0 6px 24px rgba(37,99,235,.4);
+    }
+    .cta:active { transform: translateY(0); }
+    .cta-arrow { font-size: 18px; }
+
+    /* ── Footer ── */
+    footer {
+      text-align: center;
+      padding: 20px;
+      font-size: 12px;
+      color: #334155;
+      border-top: 1px solid rgba(255,255,255,.04);
+    }
+  </style>
+</head>
+<body>
+
+<nav>
+  <div class="logo">
+    <div class="logo-dot"></div>
+    AIONOS · News Bot
+  </div>
+  <a href="/login" class="nav-login">Log in</a>
+</nav>
+
+<div class="hero">
+  <div class="badge-pill">
+    <div class="badge-pill-dot"></div>
+    AI-Powered Intelligence
+  </div>
+
+  <h1>AIONOS<br><span>Account News Bot</span></h1>
+
+  <p class="tagline">AI-powered account intelligence for your sales team</p>
+
+  <div class="features">
+    <div class="feature">
+      <div class="feature-icon">📡</div>
+      <div class="feature-text">
+        <strong>Real-time account monitoring</strong>
+        <span>Automatically tracks news, press releases, and signals across all your target accounts — so your team never misses an opening.</span>
+      </div>
+    </div>
+    <div class="feature">
+      <div class="feature-icon">🤖</div>
+      <div class="feature-text">
+        <strong>AI-scored relevance &amp; insights</strong>
+        <span>Every article is scored for priority, categorized by business impact, and paired with a recommended sales action — ready to act on.</span>
+      </div>
+    </div>
+    <div class="feature">
+      <div class="feature-icon">✉️</div>
+      <div class="feature-text">
+        <strong>One-click newsletter delivery</strong>
+        <span>Review, curate, and send polished digest emails to account owners directly from the dashboard — no copy-pasting required.</span>
+      </div>
+    </div>
+  </div>
+
+  <a href="/login" class="cta">
+    Get Started <span class="cta-arrow">→</span>
+  </a>
+</div>
+
+<footer>
+  &copy; 2025 AIONOS. All rights reserved.
+</footer>
+
+</body>
+</html>

@@ -38,7 +38,17 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 @app.get("/", response_class=FileResponse)
-def index():
+def landing():
+    return FileResponse(os.path.join(STATIC_DIR, "landing.html"))
+
+
+@app.get("/login", response_class=FileResponse)
+def login():
+    return FileResponse(os.path.join(STATIC_DIR, "login.html"))
+
+
+@app.get("/dashboard", response_class=FileResponse)
+def dashboard():
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
 # Last fetch results cached in memory, keyed by account name.

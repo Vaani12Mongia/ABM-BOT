@@ -56,7 +56,22 @@
       font-weight: 600;
     }
 
-    /* dry-run toggle */
+      /* logout button */
+    .btn-logout {
+      font-size: 12px;
+      font-weight: 500;
+      color: #64748b;
+      background: transparent;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      padding: 5px 12px;
+      cursor: pointer;
+      transition: color .15s, border-color .15s;
+      white-space: nowrap;
+    }
+    .btn-logout:hover { color: #f1f5f9; border-color: #64748b; }
+
+  /* dry-run toggle */
     .toggle-wrap {
       display: flex;
       align-items: center;
@@ -235,10 +250,11 @@
 
     /* ── News cards ── */
     .card {
+      position: relative;
       background: #fff;
       border: 1px solid #e2e8f0;
       border-radius: 10px;
-      padding: 18px 20px 16px;
+      padding: 18px 118px 16px 20px;
       margin-bottom: 14px;
       transition: box-shadow .15s;
     }
@@ -349,20 +365,28 @@
     .card.excluded .card-title { text-decoration: line-through; color: #94a3b8; }
 
     /* ── Card tick / cross / undo buttons ── */
-    .card-actions { margin-left: 8px; display: inline-flex; align-items: center; gap: 5px; }
+    .card-actions {
+      position: absolute;
+      top: 12px;
+      right: 14px;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
     .btn-tick {
       display: inline-flex; align-items: center; justify-content: center;
       width: 24px; height: 24px; border-radius: 5px;
-      border: 1px solid #86efac; background: #dcfce7; color: #16a34a;
-      font-size: 13px; flex-shrink: 0;
+      border: 1px solid #15803d; background: #16a34a; color: #fff;
+      font-size: 13px; cursor: pointer; flex-shrink: 0;
     }
+    .btn-tick:hover { background: #15803d; }
     .btn-cross {
       display: inline-flex; align-items: center; justify-content: center;
       width: 24px; height: 24px; border-radius: 5px;
-      border: 1px solid #fca5a5; background: #fef2f2; color: #dc2626;
+      border: 1px solid #b91c1c; background: #dc2626; color: #fff;
       font-size: 13px; cursor: pointer; flex-shrink: 0;
     }
-    .btn-cross:hover { background: #fee2e2; }
+    .btn-cross:hover { background: #b91c1c; }
     .btn-undo {
       padding: 2px 9px; border-radius: 5px;
       border: 1px solid #cbd5e1; background: #f1f5f9;
@@ -392,6 +416,7 @@
     </label>
     <span id="dry-run-label">preview only</span>
   </div>
+  <button class="btn-logout" onclick="logout()">Log out</button>
 </div>
 
 <!-- ── Action bar ── -->
@@ -439,12 +464,21 @@
 <div class="toast" id="toast"></div>
 
 <script>
+  if (!localStorage.getItem('logged_in')) {
+    window.location.href = '/login';
+  }
+
+  function logout() {
+    localStorage.clear();
+    window.location.href = '/';
+  }
+
   // ── State ──────────────────────────────────────────────────────────────
   let current        = "Indigo";
   let results        = {};   // { account: [article, …] }
   let previews       = {};   // { account: htmlString }
   let editMode       = false;
-  let excluded       = {};   // { account: Set<title> }
+  let excluded       = {};   // { account: [strippedTitle, ...] }
   let sortedArticles = {};   // { account: [article, …] sorted by priority }
 
   const PRIORITY_ORDER = { HIGH: 0, MEDIUM: 1, LOW: 2 };
@@ -466,6 +500,35 @@
     return String(s || "")
       .replace(/&/g, "&amp;").replace(/</g, "&lt;")
       .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  function stripHtmlTags(title) {
+    return String(title || "").replace(/<[^>]*>/g, "");
+  }
+
+  function isExcluded(account, title) {
+    return (excluded[account] || []).includes(stripHtmlTags(title));
+  }
+
+  function sanitizeNewsletterHtml(html) {
+    if (!html) return html;
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    doc
+      .querySelectorAll('div[style*="font-size:16px"][style*="font-weight:bold"]')
+      .forEach(el => { el.textContent = stripHtmlTags(el.textContent); });
+    return doc.body.innerHTML;
+  }
+
+  function getCurrentPreviewHtml() {
+    const editArea = document.getElementById("edit-area");
+    if (editArea) return editArea.innerHTML;
+
+    const iframe = document.querySelector("#preview-frame iframe");
+    if (iframe && iframe.contentDocument && iframe.contentDocument.body) {
+      return iframe.contentDocument.body.innerHTML;
+    }
+
+    return previews[current] || document.getElementById("preview-frame").innerHTML;
   }
 
   function showSpinner(msg) {
@@ -521,25 +584,26 @@
 
   // ── Build one news card ───────────────────────────────────────────────
   function buildCard(a, account, idx) {
-    const isExcluded = excluded[account] && excluded[account].has(a.title);
+    const cleanTitle = stripHtmlTags(a.title);
+    const excludedNow = isExcluded(account, a.title);
     const opportunity = a.opportunity && a.opportunity !== "none identified"
       ? `<div class="card-row"><b>Opportunity:</b> ${esc(a.opportunity)}</div>` : "";
     const readLink = a.link
       ? `<a class="card-link" href="${esc(a.link)}" target="_blank" rel="noopener">Read source →</a>` : "";
-    const actions = isExcluded
-      ? `<button class="btn-undo" onclick="setExcluded('${account}',${idx},false)">↩ Undo</button>`
-      : `<span class="btn-tick">✓</span><button class="btn-cross" onclick="setExcluded('${account}',${idx},true)">✗</button>`;
+    const cardActions = excludedNow
+      ? `<button class="btn-cross" onclick="setExcluded('${account}',${idx},true)">&#10007;</button><button class="btn-undo" onclick="setExcluded('${account}',${idx},false)">Undo</button>`
+      : `<button class="btn-tick" onclick="setExcluded('${account}',${idx},false)">&#10003;</button><button class="btn-cross" onclick="setExcluded('${account}',${idx},true)">&#10007;</button>`;
 
     return `
-<div class="card${isExcluded ? ' excluded' : ''}">
+<div class="card${excludedNow ? ' excluded' : ''}">
+  <span class="card-actions">${cardActions}</span>
   <div class="card-meta">
     ${priorityBadge(a.priority)}
     <span class="cat-badge">${esc(a.category)}</span>
     <span class="source-label">${esc(a.source)}</span>
     <span class="team-label">${esc(a.team)}</span>
-    <span class="card-actions">${actions}</span>
   </div>
-  <div class="card-title">${esc(a.title)}</div>
+  <div class="card-title">${esc(cleanTitle)}</div>
   <div class="card-row"><b>What happened:</b> ${esc(a.what_happened)}</div>
   <div class="card-row"><b>Why it matters:</b> ${esc(a.business_impact)}</div>
   <div class="card-row"><b>Recommended action:</b> ${esc(a.recommended_action)}</div>
@@ -554,7 +618,7 @@
       (a, b) => (PRIORITY_ORDER[a.priority] ?? 3) - (PRIORITY_ORDER[b.priority] ?? 3)
     );
     sortedArticles[account] = sorted;
-    if (!excluded[account]) excluded[account] = new Set();
+    if (!excluded[account]) excluded[account] = [];
     renderCardPanel(account);
   }
 
@@ -577,6 +641,8 @@
       frame.innerHTML = '<div class="preview-empty-msg">No preview available for this account.</div>';
       return;
     }
+    html = sanitizeNewsletterHtml(html);
+    previews[current] = html;
     frame.innerHTML = "";
     const iframe = document.createElement("iframe");
     iframe.setAttribute("sandbox", "allow-same-origin");
@@ -593,7 +659,7 @@
     try {
       const r = await fetch("/api/preview/" + account);
       if (!r.ok) return;
-      const html = await r.text();
+      const html = sanitizeNewsletterHtml(await r.text());
       previews[account] = html;
       if (account === current) renderPreview(html);
     } catch (_) { /* preview is non-critical */ }
@@ -663,6 +729,15 @@
     document.getElementById("btn-send").disabled = true;
 
     try {
+      const html = sanitizeNewsletterHtml(getCurrentPreviewHtml());
+      previews[current] = html;
+      const saveRes = await fetch("/api/newsletter/" + current, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ html }),
+      });
+      if (!saveRes.ok) throw new Error("Save returned " + saveRes.status);
+
       const res = await fetch("/api/send/all?dry_run=" + dry, { method: "POST" });
       if (!res.ok) throw new Error("Server returned " + res.status);
       const data = await res.json();
@@ -700,7 +775,7 @@
   async function saveEdit() {
     const area = document.getElementById("edit-area");
     if (!area) { cancelEdit(); return; }
-    const html = area.innerHTML;
+    const html = sanitizeNewsletterHtml(area.innerHTML);
     previews[current] = html;
     try {
       const res = await fetch("/api/newsletter/" + current, {
@@ -726,13 +801,13 @@
 
   // ── ARTICLE SELECTION ─────────────────────────────────────────────────
   async function setExcluded(account, idx, exclude) {
-    const title = (sortedArticles[account] || [])[idx]?.title;
+    const title = stripHtmlTags((sortedArticles[account] || [])[idx]?.title);
     if (!title) return;
-    if (!excluded[account]) excluded[account] = new Set();
+    if (!excluded[account]) excluded[account] = [];
     if (exclude) {
-      excluded[account].add(title);
+      if (!excluded[account].includes(title)) excluded[account].push(title);
     } else {
-      excluded[account].delete(title);
+      excluded[account] = excluded[account].filter(t => t !== title);
     }
     renderCardPanel(account);
     await updateSelectionPreview(account);
@@ -740,8 +815,10 @@
 
   async function updateSelectionPreview(account) {
     const articles = sortedArticles[account] || [];
-    const exc = excluded[account] || new Set();
-    const selectedTitles = articles.filter(a => !exc.has(a.title)).map(a => a.title);
+    const exc = excluded[account] || [];
+    const selectedTitles = articles
+      .filter(a => !exc.includes(stripHtmlTags(a.title)))
+      .map(a => a.title);
     try {
       const res = await fetch("/api/select/" + account, {
         method: "POST",
@@ -750,8 +827,9 @@
       });
       if (!res.ok) return;
       const data = await res.json();
-      previews[account] = data.html;
-      if (account === current) renderPreview(data.html);
+      const html = sanitizeNewsletterHtml(data.html);
+      previews[account] = html;
+      if (account === current) renderPreview(html);
     } catch (_) {}
   }
 </script>

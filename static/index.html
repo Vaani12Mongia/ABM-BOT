@@ -584,7 +584,7 @@
 
   // ── Build one news card ───────────────────────────────────────────────
   function buildCard(a, account, idx) {
-    const cleanTitle = stripHtmlTags(a.title);
+    const cleanTitle = stripHtmlTags(a.title_en || a.title);
     const excludedNow = isExcluded(account, a.title);
     const opportunity = a.opportunity && a.opportunity !== "none identified"
       ? `<div class="card-row"><b>Opportunity:</b> ${esc(a.opportunity)}</div>` : "";

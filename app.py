@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from Newsbot import (
+from newsbot import (
     collect,
     brain,
     cluster_items,
@@ -127,6 +127,7 @@ def fetch_all():
         summary[name] = [
             {
                 "title": r["item"]["title"],
+                "title_en": r["verdict"].get("title_en", r["item"]["title"]),
                 "source": r["item"]["source"],
                 "link": r["item"]["link"],
                 "priority": r["verdict"]["priority"],

@@ -1,0 +1,6 @@
+feedparser            # reads RSS feeds (website + Google Alerts)
+requests              # calls the LinkedIn provider API
+PyYAML                # reads config.yaml
+python-dotenv         # reads the .env file
+azure-ai-projects>=2.0.0   # Azure AI Foundry agent SDK (Microsoft)
+azure-identity             # DefaultAzureCredential — uses your `az login`

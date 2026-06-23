@@ -1,0 +1,43 @@
+defaults:
+  channel: email
+  mode: instant
+  review_mode: false
+
+accounts:
+  - name: Indigo
+    industry: "aviation / airline (InterGlobe Aviation)"
+    mode: digest
+    triggers: ["aircraft order", "fleet expansion", "partnership", "new route",
+               "airport expansion", "earnings", "leadership", "technology investment"]
+    account_focus: ["fleet expansion", "disruption management",
+                    "customer communications", "airport operations"]
+    sales_solutions: ["Aviation Disruption Resiliency Agent", "Notification Hub"]
+    owners:
+      - { name: "Vaani Mongia", email: "vaani.mongia26@gmail.com" }
+    sources:
+      website_rss: ""
+      alert_rss: "https://www.google.com/alerts/feeds/03747467838591000567/12389563143038780044"
+      news_query: "IndiGo Airlines"
+      company_domain: "goindigo.in"
+
+  - name: Inetum
+    industry: "IT services / digital transformation"
+    mode: digest
+    owners:
+      - { name: "Vaani Mongia", email: "vaani.mongia26@gmail.com" }
+    sources:
+      website_rss: ""
+      alert_rss: "https://www.google.com/alerts/feeds/03747467838591000567/4973256270299967108"
+      news_query: "Inetum"
+      company_domain: "inetum.com"
+
+  - name: AIONOS
+    industry: "Enterprise AI"
+    mode: digest
+    owners:
+      - { name: "Vaani Mongia", email: "vaani.mongia26@gmail.com" }
+    sources:
+      website_rss: ""
+      alert_rss: "https://www.google.com/alerts/feeds/03747467838591000567/4973256270299967447"
+      news_query: "AIONOS"
+      company_domain: "aionos.ai"

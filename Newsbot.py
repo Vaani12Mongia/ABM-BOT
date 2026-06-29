@@ -1,60 +1,61 @@
 #!/usr/bin/env python3
 """
 Account News Bot — AIONOS edition.
-
+ 
 Flow:
   collect (RSS + NewsData broad + NewsData company-site + LinkedIn)
    -> clean URLs -> CLUSTER duplicates -> dedupe memory -> AI score
    -> drop noise/LOW -> route to owner -> send / digest / hold
-
+ 
 LANGUAGE: news is collected in ALL languages (no language filter). The AI agent
 translates every field — including the headline (title_en) — into English, so
 emails are always fully English regardless of the source language.
-
+ 
 AI providers (set AI_PROVIDER in .env):
   none / anthropic / azure / azure_agent
   (Real providers HARD-FAIL on error instead of silently using keyword fallback.)
-
+ 
 azure_agent .env keys (Microsoft Foundry prompt agent via Responses API):
   AI_PROVIDER=azure_agent
   AZURE_AI_PROJECT_ENDPOINT=https://<resource>.services.ai.azure.com/api/projects/<project>
   AZURE_AI_AGENT_NAME=trial
   AZURE_AI_AGENT_VERSION=4      # bump after you update the agent's Instructions
-
+ 
 NewsData.io — TWO keys (free keys at https://newsdata.io):
   NEWSDATA_API_KEY_ALERT     -> broad news search across all outlets
   NEWSDATA_API_KEY_WEBSITE   -> same query scoped to the company's own domain
                                 (domainurl filter; PAID on NewsData, so the free
                                  tier may return little/nothing here)
-
+ 
 Per-account config (config.yaml -> accounts[].sources):
   website_rss, alert_rss, news_query, company_domain, linkedin_company
-
+ 
 Run:
   python Newsbot.py                 # normal run
   python Newsbot.py --dry-run       # never send email, just print
 """
-
-import os, sys, re, json, argparse, hashlib, smtplib, html
-from urllib.parse import urlparse, parse_qs
+ 
+import os, sys, re, json, argparse, hashlib, smtplib, html, time
+from urllib.parse import urlparse, parse_qs, urljoin
 from difflib import SequenceMatcher
 from email.message import EmailMessage
 from datetime import datetime
-
+ 
 import yaml
 import feedparser
 import requests
+from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-
+ 
 load_dotenv()
 HERE = os.path.dirname(os.path.abspath(__file__))
 SENT_FILE = os.path.join(HERE, "sent.json")
 PENDING_DIR = os.path.join(HERE, "pending")
-
+ 
 # ---------------------------------------------------------------- helpers
 def log(msg, mark=" "):
     print(f"  {mark} {msg}")
-
+ 
 def clean_url(u):
     """Unwrap Google Alert redirect links (google.com/url?...&url=REAL) into the real URL."""
     if not u:
@@ -68,11 +69,11 @@ def clean_url(u):
     except Exception:
         pass
     return u
-
+ 
 def item_key(account, title):
     raw = f"{account}|{title}".lower().strip()
     return hashlib.sha1(raw.encode()).hexdigest()
-
+ 
 def load_sent():
     if os.path.exists(SENT_FILE):
         try:
@@ -80,21 +81,21 @@ def load_sent():
         except Exception:
             return set()
     return set()
-
+ 
 def save_sent(keys):
     json.dump(sorted(keys), open(SENT_FILE, "w"), indent=0)
-
+ 
 def is_blank(url):
     return (not url) or "example" in url or "XXXX" in url
-
+ 
 # ---------------------------------------------------------------- clustering
 _STOP = {"the","a","an","at","in","on","of","to","for","and","with","is","are",
          "was","were","by","from","as","its","it","all","over","into","amid","has"}
-
+ 
 def _title_tokens(t):
     t = re.sub(r"[^a-z0-9 ]+", " ", t.lower())
     return {w for w in t.split() if w not in _STOP and len(w) > 2}
-
+ 
 def _similarity(t1, t2):
     a, b = _title_tokens(t1), _title_tokens(t2)
     if not a or not b:
@@ -102,7 +103,7 @@ def _similarity(t1, t2):
     overlap = len(a & b) / min(len(a), len(b))
     seq = SequenceMatcher(None, t1.lower(), t2.lower()).ratio()
     return max(overlap, seq)
-
+ 
 def cluster_items(items, threshold=0.5):
     clusters = []
     for it in items:
@@ -118,7 +119,7 @@ def cluster_items(items, threshold=0.5):
     for cl in clusters:
         cl.sort(key=lambda x: len(x.get("body", "")), reverse=True)
     return clusters
-
+ 
 # ---------------------------------------------------------------- collectors
 def collect_rss(url, source_label, account):
     if is_blank(url):
@@ -140,7 +141,7 @@ def collect_rss(url, source_label, account):
     except Exception as ex:
         log(f"{source_label}: error reading feed ({ex})", "✗")
     return items
-
+ 
 def _newsdata_query(api_key, query, source_label, account, extra_params=None):
     """One NewsData.io 'latest' request -> normalized items. Returns [] on any issue.
     NOTE: no 'language' filter — we collect ALL languages and translate later."""
@@ -175,13 +176,13 @@ def _newsdata_query(api_key, query, source_label, account, extra_params=None):
     except Exception as ex:
         log(f"{source_label}: error ({ex})", "✗")
         return []
-
+ 
 def collect_newsapi_broad(account, query):
     """Broad third-party news across all outlets — uses the 'alert' key."""
     return _newsdata_query(
         os.getenv("NEWSDATA_API_KEY_ALERT", ""),
         query, "NewsData broad", account)
-
+ 
 def collect_newsapi_site(account, query, domain):
     """The company's OWN announcements — scoped to its domain, uses the 'website' key."""
     if not domain:
@@ -190,11 +191,119 @@ def collect_newsapi_site(account, query, domain):
     return _newsdata_query(
         os.getenv("NEWSDATA_API_KEY_WEBSITE", ""),
         query, "NewsData site", account, extra_params={"domainurl": domain})
-
+ 
 # LinkedIn is commented out — to be enabled later with Proxycurl/Apify
 # def collect_linkedin(account, company):
 #     ...
-
+ 
+# ---------------------------------------------------------------- web scraping
+SCRAPE_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+             "AppleWebKit/537.36 Chrome/124.0 Safari/537.36")
+ 
+def _scrape_domain(url):
+    """Bare domain for the 'source' label, e.g. goindigo.in (strips leading www.)."""
+    net = urlparse(url).netloc.lower()
+    return net[4:] if net.startswith("www.") else net
+ 
+def _scrape_clean(s):
+    return re.sub(r"\s+", " ", (s or "")).strip()
+ 
+def _scrape_indigo(soup, base):
+    """IndiGo: anchors whose href contains /press-releases/ or /content/."""
+    log("scrape goindigo.in: skipped — Google News RSS is used instead", "·")
+    return []
+    # out = []
+    # for a in soup.find_all("a", href=True):
+    #     href = a["href"]
+    #     if "/press-releases/" in href or "/content/" in href:
+    #         out.append({"title": a.get_text(" ", strip=True),
+    #                     "link": urljoin(base, href)})
+    # return out
+ 
+def _scrape_inetum(soup, base):
+    """Inetum: media-center/news/press-release anchors, plus headings in cards."""
+    out = []
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if any(p in href for p in ("/media-center/", "/news/", "/press-release/")):
+            out.append({"title": a.get_text(" ", strip=True),
+                        "link": urljoin(base, href)})
+    for container in soup.select(".card, .news-item, .article"):
+        for h in container.find_all(["h2", "h3"]):
+            a = h.find("a", href=True) or container.find("a", href=True)
+            link = urljoin(base, a["href"]) if a else base
+            out.append({"title": h.get_text(" ", strip=True), "link": link})
+    return out
+ 
+def _scrape_generic(soup, base):
+    """Fallback: anchors wrapping a heading/strong, plus <article> blocks."""
+    out = []
+    for a in soup.find_all("a", href=True):
+        child = a.find(["h2", "h3", "strong"])
+        if child:
+            out.append({"title": child.get_text(" ", strip=True),
+                        "link": urljoin(base, a["href"])})
+    for art in soup.find_all("article"):
+        h = art.find(["h1", "h2", "h3"])
+        if h:
+            a = art.find("a", href=True)
+            out.append({"title": h.get_text(" ", strip=True),
+                        "link": urljoin(base, a["href"]) if a else base})
+    return out
+ 
+def collect_scraped(account_cfg):
+    """Scrape configured web pages for news items (alongside RSS + NewsData).
+ 
+    Never raises: any per-URL failure is logged as a [scrape] WARNING and skipped.
+    Returns up to 15 items per URL, deduped by title (case-insensitive) across the
+    whole call. Each item matches the standard pipeline shape (incl. 'account')."""
+    urls = account_cfg.get("scrape_urls", [])
+    if not urls:
+        return []
+    name = account_cfg["name"]
+    headers = {"User-Agent": SCRAPE_UA}
+    out, seen = [], set()
+    for i, url in enumerate(urls):
+        if i > 0:
+            time.sleep(1)  # be polite between requests
+        try:
+            resp = requests.get(url, headers=headers, timeout=25)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "html.parser")
+            domain = _scrape_domain(url)
+            if "goindigo.in" in domain:
+                raw = _scrape_indigo(soup, url)
+            elif "inetum.com" in domain:
+                raw = _scrape_inetum(soup, url)
+            else:
+                raw = _scrape_generic(soup, url)
+            kept = 0
+            for it in raw:
+                title = _scrape_clean(it.get("title"))
+                if len(title) < 10:                 # skip empty / very short
+                    continue
+                key = title.lower()
+                if key in seen:                     # dedupe across the call
+                    continue
+                seen.add(key)
+                out.append({
+                    "account": name,
+                    "source": domain,
+                    "title": title,
+                    "link": it.get("link", ""),
+                    "body": "",
+                    "published": "",
+                    "also": [],
+                })
+                kept += 1
+                if kept >= 15:                      # max 15 per URL
+                    break
+            log(f"scrape {domain}: {kept} item(s)")
+        except Exception as ex:
+            print(f"[scrape] WARNING: failed to scrape {url}: {ex}")
+            continue
+    return out
+ 
 def collect(account_cfg):
     name = account_cfg["name"]
     s = account_cfg.get("sources", {})
@@ -206,61 +315,98 @@ def collect(account_cfg):
     items += collect_newsapi_broad(name, query)
     items += collect_newsapi_site(name, query, s.get("company_domain", ""))
     # items += collect_linkedin(name, s.get("linkedin_company", ""))
+    items += collect_scraped(account_cfg)
     return items
-
+ 
 # ---------------------------------------------------------------- AI brain
+# SYS_PROMPT = """
+# You are the relevance-and-scoring engine for AIONOS's B2B account-news bot,
+# used by account managers who sell to large enterprises.
+#
+# ABOUT AIONOS (what we sell — score every item against this):
+# AIONOS builds agentic AI systems for enterprises in travel, aviation/transport,
+# hospitality, logistics, telecom, and healthcare. Core offerings:
+# - Customer-experience automation: voice AI, surveys, workflow automation,
+#   AI-assisted support (e.g. passenger/customer support).
+# - Operational efficiency & workflow orchestration: automating decisions and
+#   processes to cut cost.
+# - Disruption management / business-continuity agents: keeping operations
+#   running through disruptions.
+# - Revenue optimization & hyper-personalized customer engagement.
+# - Data intelligence and compliance-grade data governance.
+# We win when an account is investing in growth, modernization, customer
+# experience, cost reduction, resilience, or digital transformation.
+#
+# YOUR JOB:
+# Given ONE news item about a tracked account, decide whether it is a real BUYING
+# SIGNAL for AIONOS and, if so, how strong. Be strict. Most news is not actionable.
+# A single routine operational incident (one delay, one weather event, one mishap
+# where nothing changes) is NOT a signal — mark it not relevant. Only flag items
+# that give an account manager a concrete reason to start or advance a conversation.
+#
+# HARD RULES:
+# - If the item is NOT specifically about the tracked account itself, set
+#   relevant = false (other companies, generic round-ups / "top N" lists, stock
+#   tips, fan / flight-simulator / hobby videos).
+# - The source may be in ANY language (English, French, Hindi, etc.). ALWAYS write
+#   EVERY output field — including "title_en" — in clear, natural English.
+#   Translate the headline and all details. Never output non-English text.
+#
+# REAL SIGNALS (relevant = true):
+# - Leadership change (new CEO/CIO/CTO/CFO/COO/Head of Digital) -> new agenda & budget.
+# - Funding, strong earnings, major capex or investment plans -> money to spend.
+# - Product/service launch, new routes/markets/facilities, expansion, big hiring -> scaling.
+# - Partnership, M&A, or a stated digital-transformation / AI / automation initiative -> direct fit.
+# - A PATTERN of operational pain (repeated disruptions, complaints, capacity strain) -> resilience/CX pitch.
+# - Regulatory/compliance change forcing them to act -> governance/compliance angle.
+#
+# NOISE (relevant = false):
+# - One-off incidents with no lasting change ("flight struck by lightning, all safe").
+# - Awards/rankings/lists with no action attached.
+# - Social posts, anniversaries, generic PR, opinion pieces, hobby videos.
+#
+# PRIORITY:
+# - HIGH: clear, time-sensitive signal with obvious AIONOS fit.
+# - MEDIUM: real signal worth a touch, not urgent.
+# - LOW: weak / context-only; usually set relevant = false instead.
+#
+# TEAM this matters to (pick exactly ONE): Finance | Legal/Compliance | Operations | Technology/IT | Customer Experience | Executive.
+#
+# Reply with ONLY a JSON object, no markdown:
+# {
+#   "relevant": true|false,
+#   "priority": "HIGH|MEDIUM|LOW",
+#   "category": "Leadership|Funding|Product|Partnership|Expansion|Operational|Regulatory|Industry|Other",
+#   "team": "Finance|Legal/Compliance|Operations|Technology/IT|Customer Experience|Executive",
+#   "title_en": "<the article headline, in English>",
+#   "reason": "<one short line: why it is or isn't a signal>",
+#   "what_happened": "<one sentence, in English>",
+#   "business_impact": "<why it matters for AIONOS's chance to sell, in English>",
+#   "recommended_action": "<concrete next step, or 'no action'>",
+#   "opportunity": "<which AIONOS offering fits, or 'none identified'>"
+# }
+# """.strip()
+
 SYS_PROMPT = """
-You are the relevance-and-scoring engine for AIONOS's B2B account-news bot,
-used by account managers who sell to large enterprises.
+You are a B2B sales intelligence scoring engine for AIONOS, which sells agentic AI
+systems to enterprises in aviation, hospitality, logistics, telecom, and healthcare.
+AIONOS offerings: customer-experience automation, workflow orchestration, disruption
+management agents, revenue optimization, and data governance.
 
-ABOUT AIONOS (what we sell — score every item against this):
-AIONOS builds agentic AI systems for enterprises in travel, aviation/transport,
-hospitality, logistics, telecom, and healthcare. Core offerings:
-- Customer-experience automation: voice AI, surveys, workflow automation,
-  AI-assisted support (e.g. passenger/customer support).
-- Operational efficiency & workflow orchestration: automating decisions and
-  processes to cut cost.
-- Disruption management / business-continuity agents: keeping operations
-  running through disruptions.
-- Revenue optimization & hyper-personalized customer engagement.
-- Data intelligence and compliance-grade data governance.
-We win when an account is investing in growth, modernization, customer
-experience, cost reduction, resilience, or digital transformation.
+Given ONE news item about a tracked account, return a JSON object deciding if it is
+a buying signal. Be strict — most news is not actionable.
 
-YOUR JOB:
-Given ONE news item about a tracked account, decide whether it is a real BUYING
-SIGNAL for AIONOS and, if so, how strong. Be strict. Most news is not actionable.
-A single routine operational incident (one delay, one weather event, one mishap
-where nothing changes) is NOT a signal — mark it not relevant. Only flag items
-that give an account manager a concrete reason to start or advance a conversation.
+SIGNAL (relevant=true): leadership change, funding/earnings, product launch,
+partnership/M&A, digital transformation initiative, pattern of operational pain,
+regulatory change forcing action.
 
-HARD RULES:
-- If the item is NOT specifically about the tracked account itself, set
-  relevant = false (other companies, generic round-ups / "top N" lists, stock
-  tips, fan / flight-simulator / hobby videos).
-- The source may be in ANY language (English, French, Hindi, etc.). ALWAYS write
-  EVERY output field — including "title_en" — in clear, natural English.
-  Translate the headline and all details. Never output non-English text.
+NOISE (relevant=false): one-off incidents, awards, social posts, generic PR,
+hobby content, items not specifically about the tracked account.
 
-REAL SIGNALS (relevant = true):
-- Leadership change (new CEO/CIO/CTO/CFO/COO/Head of Digital) -> new agenda & budget.
-- Funding, strong earnings, major capex or investment plans -> money to spend.
-- Product/service launch, new routes/markets/facilities, expansion, big hiring -> scaling.
-- Partnership, M&A, or a stated digital-transformation / AI / automation initiative -> direct fit.
-- A PATTERN of operational pain (repeated disruptions, complaints, capacity strain) -> resilience/CX pitch.
-- Regulatory/compliance change forcing them to act -> governance/compliance angle.
+PRIORITY: HIGH=urgent clear fit, MEDIUM=worth a touch, LOW=set relevant=false instead.
+TEAM (pick one): Finance | Legal/Compliance | Operations | Technology/IT | Customer Experience | Executive
 
-NOISE (relevant = false):
-- One-off incidents with no lasting change ("flight struck by lightning, all safe").
-- Awards/rankings/lists with no action attached.
-- Social posts, anniversaries, generic PR, opinion pieces, hobby videos.
-
-PRIORITY:
-- HIGH: clear, time-sensitive signal with obvious AIONOS fit.
-- MEDIUM: real signal worth a touch, not urgent.
-- LOW: weak / context-only; usually set relevant = false instead.
-
-TEAM this matters to (pick exactly ONE): Finance | Legal/Compliance | Operations | Technology/IT | Customer Experience | Executive.
+Always write ALL fields in English regardless of source language. Translate if needed.
 
 Reply with ONLY a JSON object, no markdown:
 {
@@ -268,19 +414,19 @@ Reply with ONLY a JSON object, no markdown:
   "priority": "HIGH|MEDIUM|LOW",
   "category": "Leadership|Funding|Product|Partnership|Expansion|Operational|Regulatory|Industry|Other",
   "team": "Finance|Legal/Compliance|Operations|Technology/IT|Customer Experience|Executive",
-  "title_en": "<the article headline, in English>",
-  "reason": "<one short line: why it is or isn't a signal>",
-  "what_happened": "<one sentence, in English>",
-  "business_impact": "<why it matters for AIONOS's chance to sell, in English>",
-  "recommended_action": "<concrete next step, or 'no action'>",
-  "opportunity": "<which AIONOS offering fits, or 'none identified'>"
+  "title_en": "<headline in English>",
+  "reason": "<one line: why signal or not>",
+  "what_happened": "<one sentence in English>",
+  "business_impact": "<why it matters for AIONOS sales>",
+  "recommended_action": "<concrete next step or no action>",
+  "opportunity": "<which AIONOS offering fits or none identified>"
 }
 """.strip()
-
+ 
 def _parse_json(text):
     text = (text or "").replace("```json", "").replace("```", "").strip()
     return json.loads(text)
-
+ 
 def brain(item, industry):
     provider = os.getenv("AI_PROVIDER", "none")
     user = (f"Account: {item['account']}\nIndustry: {industry}\n"
@@ -293,7 +439,7 @@ def brain(item, industry):
                 model=os.environ["ANTHROPIC_MODEL"], max_tokens=500,
                 system=SYS_PROMPT, messages=[{"role": "user", "content": user}])
             return {**_parse_json(msg.content[0].text), "_by": "AI"}
-
+ 
         if provider == "azure":
             from openai import AzureOpenAI
             client = AzureOpenAI(
@@ -305,16 +451,16 @@ def brain(item, industry):
                 messages=[{"role": "system", "content": SYS_PROMPT},
                           {"role": "user", "content": user}])
             return {**_parse_json(resp.choices[0].message.content), "_by": "AI"}
-
+ 
         if provider == "azure_agent":
             from azure.identity import DefaultAzureCredential, get_bearer_token_provider
             from openai import OpenAI
-
+ 
             base = os.environ["AZURE_AI_PROJECT_ENDPOINT"].rstrip("/") + "/openai/v1"
             token_provider = get_bearer_token_provider(
                 DefaultAzureCredential(), "https://ai.azure.com/.default")
             client = OpenAI(base_url=base, api_key=token_provider)
-
+ 
             resp = client.responses.create(
                 extra_body={"agent_reference": {
                     "type": "agent_reference",
@@ -325,12 +471,39 @@ def brain(item, industry):
             )
             return {**_parse_json(resp.output_text), "_by": "AI(agent)"}
 
+        if provider == "gemini":
+            from google import genai
+            from google.genai import types
+            time.sleep(4)  # max ~15 requests/min on free tier
+            client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+            resp = client.models.generate_content(
+                model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
+                contents=user,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYS_PROMPT,
+                    max_output_tokens=500,
+                )
+            )
+            return {**_parse_json(resp.text), "_by": "AI"}
+
+        if provider == "groq":
+            time.sleep(6)
+            from groq import Groq
+            client = Groq(api_key=os.environ["GROQ_API_KEY"])
+            resp = client.chat.completions.create(
+                model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+                max_tokens=500,
+                messages=[{"role": "system", "content": SYS_PROMPT},
+                          {"role": "user", "content": user}])
+            return {**_parse_json(resp.choices[0].message.content), "_by": "AI"}
+
     except Exception as ex:
-        if provider in ("anthropic", "azure", "azure_agent"):
+        is_quota_error = "429" in str(ex) or "RESOURCE_EXHAUSTED" in str(ex) or "quota" in str(ex).lower()
+        if provider in ("anthropic", "azure", "azure_agent", "gemini","groq") and not is_quota_error:
             raise RuntimeError(
                 f"{provider} scoring failed for '{item['title']}': {ex}") from ex
         log(f"AI brain error, using fallback ({ex})", "!")
-
+ 
     # ---- Keyword fallback — ONLY reached when AI_PROVIDER=none ----
     noise = ("picnic", "photos", "meme", "birthday", "anniversary", "webinar reminder")
     relevant = not any(w in item["title"].lower() for w in noise)
@@ -347,14 +520,14 @@ def brain(item, industry):
         "opportunity": "none identified",
         "_by": "fallback",
     }
-
+ 
 # ---------------------------------------------------------------- delivery (plain text)
 BAR = "=" * 48
-
+ 
 def _title_of(item, v):
     """Always prefer the agent's English headline; fall back to the source title."""
     return v.get("title_en") or item.get("title", "")
-
+ 
 def _render_block(item, v):
     lines = [
         BAR,
@@ -376,7 +549,7 @@ def _render_block(item, v):
             lines.append(f"  - {a['source']}: {a['link'] or '(n/a)'}")
     lines.append(BAR)
     return "\n".join(lines)
-
+ 
 def render_email(to_owners, subject, rows):
     head = []
     if to_owners:
@@ -386,14 +559,14 @@ def render_email(to_owners, subject, rows):
     head.append("")
     blocks = [_render_block(r["item"], r["verdict"]) for r in rows]
     return "\n".join(head) + "\n" + "\n\n".join(blocks) + "\n"
-
+ 
 # ---------------------------------------------------------------- delivery (HTML)
 def _priority_color(p):
     return {"HIGH": "#c0392b", "MEDIUM": "#b9770e", "LOW": "#7f8c8d"}.get(str(p).upper(), "#7f8c8d")
-
+ 
 def _esc(s):
     return html.escape(str(s or ""))
-
+ 
 def render_email_html(account, rows):
     cards = ""
     for r in rows:
@@ -429,7 +602,7 @@ def render_email_html(account, rows):
       {cards}
       <p style="font-size:11px;color:#9ca3af;border-top:1px solid #e5e7eb;padding-top:12px;margin-top:4px;">Generated automatically by the AIONOS Account News Bot. Reply to this email to flag anything that looks off.</p>
     </div>"""
-
+ 
 # ---------------------------------------------------------------- send_email
 # NOTE: accepts optional html= parameter so the UI can pass in edited HTML
 def send_email(to_owners, subject, account, rows, dry_run, html=None):
@@ -454,47 +627,47 @@ def send_email(to_owners, subject, account, rows, dry_run, html=None):
         smtp.login(os.environ["SMTP_USER"], os.environ["SMTP_PASS"])
         smtp.send_message(msg)
     log(f"email sent to {', '.join(o['name'] for o in to_owners)}", "✓")
-
+ 
 def save_pending(account, subject, rows):
     os.makedirs(PENDING_DIR, exist_ok=True)
     fn = os.path.join(PENDING_DIR, f"{account}_{datetime.now():%Y%m%d_%H%M%S}.txt")
     open(fn, "w", encoding="utf-8").write(render_email([], subject, rows))
     log(f"held for review -> {os.path.relpath(fn, HERE)}", "⏸")
-
+ 
 # ---------------------------------------------------------------- pipeline
 def run_once(config, dry_run):
     provider = os.getenv("AI_PROVIDER", "none")
     print(f"\n[AI provider: {provider}]  [{'DRY-RUN' if dry_run else 'LIVE SEND'}]")
-
+ 
     defaults = config.get("defaults", {})
     review_mode = defaults.get("review_mode", False)
     sent = load_sent()
     digest_buffer = {}
-
+ 
     for acct in config["accounts"]:
         name = acct["name"]
         mode = acct.get("mode", defaults.get("mode", "instant"))
         owners = acct["owners"]
         print(f"\n=== {name} ({mode}) ===")
-
+ 
         for cluster in cluster_items(collect(acct)):
             item = cluster[0]
             item["also"] = [{"source": x["source"], "link": x["link"]} for x in cluster[1:]]
             if len(cluster) > 1:
                 log(f"merged {len(cluster)} sources: {item['title']}", "↻")
-
+ 
             k = item_key(name, item["title"])
             if k in sent:
                 log(f"duplicate, skip: {item['title']}", "·"); continue
-
+ 
             v = brain(item, acct.get("industry", ""))
             if not v.get("relevant"):
                 log(f"skip (not relevant, {v['_by']}): {item['title']}", "✗"); continue
-
+ 
             row = {"item": item, "verdict": v}
             headline = _title_of(item, v)
             log(f"relevant · {v.get('priority')} {v.get('category')} ({v['_by']}): {headline}", "✓")
-
+ 
             subject = f"[{name}] {v.get('priority')} · {v.get('category')}: {headline}"
             if review_mode:
                 save_pending(name, subject, [row]); continue
@@ -502,7 +675,7 @@ def run_once(config, dry_run):
                 digest_buffer.setdefault(name, []).append(row); continue
             send_email(owners, subject, name, [row], dry_run)
             sent.add(k)
-
+ 
     for acct in config["accounts"]:
         rows = digest_buffer.get(acct["name"])
         if rows:
@@ -510,10 +683,10 @@ def run_once(config, dry_run):
             send_email(acct["owners"], subj, acct["name"], rows, dry_run)
             for r in rows:
                 sent.add(item_key(acct["name"], r["item"]["title"]))
-
+ 
     save_sent(sent)
     print("\n— run complete —")
-
+ 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=os.path.join(HERE, "config.yaml"))
@@ -521,6 +694,6 @@ def main():
     args = ap.parse_args()
     config = yaml.safe_load(open(args.config))
     run_once(config, args.dry_run)
-
+ 
 if __name__ == "__main__":
     main()

@@ -1,6 +1,16 @@
 feedparser            # reads RSS feeds (website + Google Alerts)
-requests              # calls the LinkedIn provider API
+requests              # HTTP calls — NewsData API + web scraping
+beautifulsoup4        # HTML parsing for web scraping (collect_scraped)
 PyYAML                # reads config.yaml
 python-dotenv         # reads the .env file
+anthropic             # Anthropic Claude API (AI_PROVIDER=anthropic)
 azure-ai-projects>=2.0.0   # Azure AI Foundry agent SDK (Microsoft)
 azure-identity             # DefaultAzureCredential — uses your `az login`
+uvicorn[standard]          # ASGI server
+fastapi                    # web framework
+starlette                  # required by FastAPI (sessions, middleware)
+itsdangerous               # session signing
+pydantic                   # request/response models (used by FastAPI)
+httpx                      # async HTTP client (used internally by FastAPI)
+python-multipart           # form parsing for login (request.form())
+apscheduler                # background scheduler for auto-fetch every 6 hours

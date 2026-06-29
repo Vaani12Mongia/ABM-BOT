@@ -464,14 +464,10 @@
 <div class="toast" id="toast"></div>
 
 <script>
-  if (!localStorage.getItem('logged_in')) {
-    window.location.href = '/login';
-  }
-
+  // auth handled server-side by app.py
   function logout() {
-    localStorage.clear();
-    window.location.href = '/';
-  }
+    window.location.href = '/auth/logout';
+}
 
   // ── State ──────────────────────────────────────────────────────────────
   let current        = "Indigo";
@@ -832,6 +828,34 @@
       if (account === current) renderPreview(html);
     } catch (_) {}
   }
+
+  // Load scheduler results on page open
+async function loadCachedResults() {
+    try {
+        const res = await fetch("/api/results");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!Object.keys(data).length) return;
+        results = data;
+        let total = 0;
+        for (const [acct, articles] of Object.entries(data)) {
+            total += articles.length;
+            renderCards(acct, articles);
+        }
+        if (total > 0) {
+            document.getElementById("s-time").textContent = "auto-fetched";
+            document.getElementById("s-fetched").textContent = total;
+            document.getElementById("s-passed").textContent = total;
+            document.getElementById("btn-edit").disabled = false;
+            document.getElementById("btn-send").disabled = false;
+            await Promise.all(Object.keys(data).map(loadPreview));
+        }
+    } catch (_) {}
+}
+
+// Call on page load
+loadCachedResults();
+
 </script>
 
 </body>

@@ -1,0 +1,10 @@
+.env
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+sent.json
+*.md
+docker-compose.yml
+ 
